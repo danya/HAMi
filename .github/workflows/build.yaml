@@ -1,0 +1,59 @@
+name: build
+
+# Builds a HAMi image from a build/<tag> branch of this fork and pushes
+# it to ghcr.io/<owner>/hami:<tag>. The branch name after the prefix is the tag
+# and the VERSION baked into the image.
+on:
+  push:
+    branches:
+      - 'build/**'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # docker/Dockerfile copies .git/modules/libvgpu, so the submodule
+          # must be checked out with its git dir.
+          submodules: recursive
+          fetch-depth: 0
+
+      - id: meta
+        run: |
+          tag="${GITHUB_REF_NAME#build/}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${owner}/hami" >> "$GITHUB_OUTPUT"
+          echo "libvgpu=$(git ls-tree HEAD libvgpu | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.tag }}
+            DEST_DIR=/usr/local
+            GOPROXY=https://proxy.golang.org
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}-${{ steps.meta.outputs.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            io.project-hami.libvgpu.revision=${{ steps.meta.outputs.libvgpu }}
