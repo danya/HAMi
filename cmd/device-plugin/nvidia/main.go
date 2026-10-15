@@ -477,6 +477,7 @@ func startPlugins(
 	)
 	devicelib := device.New(nvmllib)
 	infolib := nvinfo.New(
+		nvinfo.WithRoot(string(driverRoot)),
 		nvinfo.WithNvmlLib(nvmllib),
 		nvinfo.WithDeviceLib(devicelib),
 	)
