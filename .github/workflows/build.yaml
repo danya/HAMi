@@ -2,7 +2,8 @@ name: build
 
 # Builds a HAMi image from a build/<tag> branch of this fork and pushes
 # it to ghcr.io/<owner>/hami:<tag>. The branch name after the prefix is the tag
-# and the VERSION baked into the image.
+# and the VERSION baked into the image. The chart goes to
+# oci://ghcr.io/<owner>/charts/hami, version <tag> without the leading v.
 on:
   push:
     branches:
@@ -57,3 +58,14 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             io.project-hami.libvgpu.revision=${{ steps.meta.outputs.libvgpu }}
+
+      - uses: azure/setup-helm@v4
+
+      - name: Push chart
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          helm package charts/hami --version "${TAG#v}" --app-version "${TAG}" -d dist
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push dist/hami-"${TAG#v}".tgz "oci://ghcr.io/${OWNER,,}/charts"
