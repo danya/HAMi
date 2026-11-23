@@ -934,6 +934,48 @@ func plannedMigAllocation(profiles []device.MigProfile, occupied []device.MigPla
 }
 
 func (dev *NvidiaGPUDevices) ScoreNode(node *corev1.Node, podDevices device.PodSingleDevice, previous []*device.DeviceUsage, policy string) float32 {
+	// FIXME: NVIDIA nodes are ranked by usage only; GPU links never reach the
+	// node score.
+	//
+	// Today: scoreNode (pkg/scheduler/score.go) runs Fit per node, and with the
+	// topology-aware GPU policy Fit already picks the best-linked set on that
+	// node (computeBestCombination). The node score is then
+	// ComputeDefaultScore (usage, binpack/spread) + OverrideScore (this
+	// function, 0 for NVIDIA) + preferred node affinity. So the set found on
+	// each node never compares nodes.
+	//
+	// Example: node A has a free NVLink pair (NV18, pair score 1800), node B
+	// has two free cards behind one PCIe host bridge (PHB, 30), B is less
+	// used. A 2-GPU topology-aware pod lands on B under spread; tensor
+	// parallel traffic then crosses PCIe (~50 GB/s instead of ~900 GB/s) and
+	// vLLM turns off custom allreduce.
+	//
+	// Other backends already score nodes this way: Metax sGPU
+	// (scoreExclusiveDevices, PolicyNeutralScore), Ascend 910 (NetworkID ring),
+	// Kunlun (calcscore), Vastai (AIC). AMD returns 0 too (issue #3137).
+	//
+	// Proposal:
+	//   - Score only pods with the topology-aware GPU policy, 0 otherwise.
+	//     The policy argument here is the NODE policy (binpack/spread), not the
+	//     GPU policy: pass the pod's hami.io/gpu-scheduler-policy through
+	//     ContainerDevice.CustomInfo, as Metax does with "Pod.Annotations".
+	//   - Count > 1: the sum of pair scores inside the chosen set
+	//     (getDevicePairScoreMap), normalised to 0..1, e.g. divided by
+	//     1800 × pairs.
+	//   - Count == 1: the opposite, higher when the chosen card is linked worst
+	//     to the other free cards, so single-GPU pods do not break NVLink pairs
+	//     (same idea as computeWorstSingleCard inside a node). With the
+	//     tie-break in computeBestCombination this is one rule for every count:
+	//     inside sum first, then the lowest sum to the free cards left.
+	//   - Implement PolicyNeutralScore so OverrideScore weights the score by
+	//     10000 and flips its sign under spread: links win over usage, usage
+	//     breaks ties. A smaller weight would trade links for packing.
+	//   - Tests: two nodes, equal usage, one with an NVLink pair → it wins;
+	//     unequal usage → links still win; 1 GPU → the node whose free card is
+	//     linked worst wins; no topology-aware or no scores → 0.
+	//
+	// Upstream: open an issue with the example first, then a small PR
+	// (maintainers asked for a design before code in #3268).
 	return 0
 }
 
