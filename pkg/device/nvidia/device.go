@@ -1430,6 +1430,42 @@ func computeWorstSingleCard(nodeInfo *device.NodeInfo, request device.ContainerD
 	return worstDevices
 }
 
+// TODO: break ties by the links to the cards left free.
+//
+// Today the first set with the highest sum of pair scores wins; links from
+// the set to the other free candidates are ignored, so a pick can break a
+// well-linked group that a later pod needs.
+//
+// Example: six free cards. A, B, C, D are NVLinked to each other (score 1800
+// per pair); E–F is a separate NVLink pair (1800); every other pair is PCIe
+// (20). A 2-GPU ask: A–B and E–F both score 1800 inside, and generation order
+// can make A–B win. The 4-card group is broken and the next 4-GPU ask gets no
+// NVLink set, though E–F would have served the first ask equally well.
+//
+// Rule: compare sets by two keys in order.
+//  1. inside: the sum of pair scores over the pairs in the set, higher first;
+//  2. outside: the sum of pair scores from each card in the set to each free
+//     candidate not in the set, lower first.
+//
+// Example values: need 2 → E–F (inside 1800, outside 8 × 20 = 160) beats A–B
+// (inside 1800, outside 2 × (2 × 1800 + 2 × 20) = 7280). need 4 → A–D (inside
+// 10800, outside 160). need 1 → E or F (inside 0, outside 1800 + 4 × 20 =
+// 1880) beats A (outside 3 × 1800 + 2 × 20 = 5440).
+//
+// For one card the inside key is 0 for every set and the outside key is what
+// computeWorstSingleCard does, so one rule covers every count and
+// computeWorstSingleCard can become a special case of this function.
+//
+// Keys in order, not a weight: the current pod never gets a worse set; the
+// outside key only decides between equal sets. A weight (inside − k × outside)
+// would protect groups more but can give the current pod a slower set.
+//
+// Claven's deployment-service already ranks nodes by this rule for dedicated
+// tenants; without it here HAMi can still pick A–B on the chosen node.
+//
+// Upstream: smaller and safer than the ScoreNode change (only ties change,
+// the best set never gets worse). Issue with this example first, then a PR
+// with a test for the example and for need 1 matching computeWorstSingleCard.
 func computeBestCombination(nodeInfo *device.NodeInfo, combinations []device.ContainerDevices) device.ContainerDevices {
 	bestScore := -1
 	bestCombination := device.ContainerDevices{}
